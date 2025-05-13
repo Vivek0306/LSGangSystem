@@ -7,12 +7,15 @@ using System.Collections.Generic;
 
 public class LSGangSystem : Script
 {
-    private Ped gang_member = null;
+    private Ped nearbyPed = null;
     private List<Ped> gang_members = new List<Ped>();
     private float recruitRange = 3.0f;
     private int max_members = 4;
+    bool isExistingGangMember = false;
 
     private int notifyTimer = 0;
+    private int keyHoldTimer = 0;
+    private bool isHoldingKey = false;
     private Dictionary<Ped, Blip> gang_blips = new Dictionary<Ped, Blip>();
 
     public LSGangSystem()
@@ -36,18 +39,58 @@ public class LSGangSystem : Script
             notifyTimer = 0;
         }
 
-        if (gang_member == null || !gang_member.Exists() || gang_member.IsDead)
+        // Recruitment Handler
+        if (nearbyPed == null || !nearbyPed.Exists() || nearbyPed.IsDead)
         {
-            gang_member = GetNearbyPed();
+            (nearbyPed, isExistingGangMember) = GetNearbyPedType();
         }
 
-        if (gang_member != null)
+        if (nearbyPed != null)
         {
-            GTA.UI.ShowSubtitle("Press ~y~Y~w~ to recruit, ~r~N~w~ to cancel");
-
-            if (gang_member.Position.DistanceTo(Game.Player.Character.Position) > recruitRange)
-                gang_member = null;
+            if (!isExistingGangMember)
+            {
+                GTA.UI.ShowSubtitle("Press ~y~Y~w~ to recruit, ~r~N~w~ to cancel");
+            }
+            else if (isExistingGangMember)
+            {
+                GTA.UI.ShowSubtitle("Hold ~y~N~w~ to dismiss gang member");
+            }
+            if (nearbyPed.Position.DistanceTo(Game.Player.Character.Position) > recruitRange) 
+            {
+                nearbyPed = null;
+                isExistingGangMember = false; 
+            }
         }
+
+        // Dismissal Handler
+        if(isHoldingKey)
+        {
+            keyHoldTimer++;
+            if (keyHoldTimer >= 300)
+            {
+                gang_members.Remove(nearbyPed);
+                gang_blips[nearbyPed].Remove();
+
+                Function.Call(Hash.REMOVE_PED_FROM_GROUP, nearbyPed.Handle);
+                nearbyPed.Task.ClearAllImmediately();
+                nearbyPed.IsPersistent = false;
+                nearbyPed.MarkAsNoLongerNeeded();
+
+                keyHoldTimer = 0;
+                isHoldingKey = false;
+
+                GTA.UI.Notify("~b~Gang member dismissed!");
+
+
+
+
+
+
+            }
+            
+        }
+
+
 
         for (int i = gang_members.Count - 1; i >= 0; i--)
         {
@@ -69,10 +112,11 @@ public class LSGangSystem : Script
             {
                 gang_members[i].Kill();
                 gang_members.RemoveAt(i);
+                gang_blips.Clear();
             }
         }
 
-        Ped[] nearbyPeds = World.GetNearbyPeds(player, 30f);
+        Ped[] nearbyPeds = World.GetNearbyPeds(player, 50f);
 
         foreach (Ped ped in nearbyPeds)
         {
@@ -97,28 +141,34 @@ public class LSGangSystem : Script
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
+        // Recruitment Keys
         Ped player = Game.Player.Character;
-        if (gang_member != null && gang_member.Exists())
+        if (nearbyPed != null && nearbyPed.Exists())
         {
             if (e.KeyCode == Keys.Y)
             {
-                RecruitPed(gang_member);
-                gang_member = null;
+                RecruitPed(nearbyPed);
+                nearbyPed = null;
             }
-            else if (e.KeyCode == Keys.N)
+            else if (e.KeyCode == Keys.N )
             {
-                GTA.UI.Notify("~r~Recruitment Cancelled!");
-                gang_member = null;
+                isHoldingKey = true;
+                if (!isExistingGangMember)
+                {
+                    GTA.UI.Notify("~r~Recruitment Cancelled!");
+                    nearbyPed = null;
+                }
             }
         }
 
+        // Disband Gang
         if (e.KeyCode == Keys.L)
         {
             if (gang_members.Count > 0)
             {
                 foreach (Ped ped in gang_members)
                 {
-                    if (ped.Exists())
+                    if (ped.Exists() || ped.IsAlive || ped.IsDead)
                     {
                         if (gang_blips.ContainsKey(ped))
                         {
@@ -132,23 +182,79 @@ public class LSGangSystem : Script
                 }
                 gang_blips.Clear();
                 gang_members.Clear();
-                GTA.UI.Notify("~r~All Gang Members Dismissed!");
+                GTA.UI.Notify("~r~Gang Disbanded!");
             }
         }
 
+        // TEST: Clear Wanted
         if (e.KeyCode == Keys.B)
         {
             Game.Player.WantedLevel = 0;
             GTA.UI.Notify("~b~Wanted level cleared!");
         }
-
-        if (e.KeyCode == Keys.N)
+        // TEST: Spawn Enemy
+        if (e.KeyCode == Keys.K)
         {
             SpawnEnemyPed();
         }
     }
 
-    private void OnKeyUp(object sender, KeyEventArgs e) { }
+    private void OnKeyUp(object sender, KeyEventArgs e) {
+        if(e.KeyCode == Keys.N)
+        {
+            isHoldingKey = false;
+        }
+    }
+
+    private Ped GetNearbyPed()
+    {
+        Ped player = Game.Player.Character;
+        Ped[] nearbyPeds = World.GetNearbyPeds(player, 10f);
+
+        foreach (Ped ped in nearbyPeds)
+        {
+            if (ped != player && !ped.IsInCombat && !gang_members.Contains(ped) && ped.IsAlive)
+            {
+                if (ped.Position.DistanceTo(player.Position) < recruitRange)
+                {
+                    return ped;
+                }
+            }
+            else if (gang_members.Contains(ped) && ped.IsAlive) // TODO: Implement Individual Dismissal
+            {
+                return ped;
+            }
+        }
+
+        return null;
+    }
+
+    // TEST 
+    private (Ped, bool) GetNearbyPedType()
+    {
+        Ped player = Game.Player.Character;
+        Ped[] nearbyPeds = World.GetNearbyPeds(player, 10f);
+
+        foreach (Ped ped in nearbyPeds)
+        {
+            if (ped != player && !ped.IsInCombat && !gang_members.Contains(ped) && ped.IsAlive)
+            {
+                if (ped.Position.DistanceTo(player.Position) < recruitRange)
+                {
+                    return (ped, false);
+                }
+            }
+            else if (gang_members.Contains(ped) && ped.IsAlive) // TODO: Implement Individual Dismissal
+            {
+                return (ped, true);
+            }
+        }
+
+        return (null, false);
+    }
+
+
+
 
     private void RecruitPed(Ped ped)
     {
@@ -202,22 +308,6 @@ public class LSGangSystem : Script
             UI.Notify("~r~Failed to create Enemy!");
         }
     }
-    private Ped GetNearbyPed()
-    {
-        Ped player = Game.Player.Character;
-        Ped[] nearbyPeds = World.GetNearbyPeds(player, 10f);
 
-        foreach (Ped ped in nearbyPeds)
-        {
-            if (ped != player && !ped.IsInCombat && !gang_members.Contains(ped) && ped.IsAlive)
-            {
-                if (ped.Position.DistanceTo(player.Position) < recruitRange)
-                {
-                    return ped;
-                }
-            }
-        }
 
-        return null;
-    }
 }
